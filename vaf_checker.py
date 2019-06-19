@@ -11,8 +11,10 @@ import sys
 import collections
 import subprocess
 
+# Get version from git
 __version__ = subprocess.check_output(["git", "describe"]).strip().decode('UTF-8')
 
+# Set arguments
 parser = argparse.ArgumentParser()
 parser = argparse.ArgumentParser(description='Put here a description.')
 parser.add_argument('-i', '--input', type=str, help='Input vcf file', required=True)
@@ -24,9 +26,14 @@ parser.add_argument('-p', '--base_phred_quality', default=0, type=int, help="Inc
 parser.add_argument('-v', '--version', action='version', version=__version__)
 
 args = parser.parse_args()
-args.bam = [x for l in args.bam for x in l] #Flatten input list of bam files
+# Flatten input list of bam files
+args.bam = [x for l in args.bam for x in l]
 
 def get_command_line():
+    """
+    Function to get the commandline arguments
+    Return: A string with the actual command.
+    """
     cmdline = sys.argv[0]
     for arg in vars(args):
         if type(getattr(args,arg)) is list:
@@ -37,16 +44,32 @@ def get_command_line():
     return( '"'+cmdline+'"' )
 
 def fix_vcf_header( vcf_reader ):
+    """
+    Function to fix fields in the vcf header
+    Input: A vcf reader object
+    Return: The vcf reader object with fixed headers
+    """
+    #dbNSFP_clinvar_clnsig has a Integer type but sometimes it is a String, e.g. 2|2
     vcf_reader.infos['dbNSFP_clinvar_clnsig'] = pyvcf.parser._Info("dbNSFP_clinvar_clnsig",1,"String","Field 'clinvar_clnsig' from dbNSFP", None, None)
     return( vcf_reader )
 
 def add_vcf_header( vcf_reader ):
+    """
+    Function to add a new field to the vcf header
+    Input: A vcf reader object
+    Return: The vcf reader object with new headers added
+    """
     vcf_reader.formats['VAF'] = pyvcf.parser._Format('VAF',None,'Integer','Variant Allele Frequency calculated from the BAM file')
     vcf_reader.formats['CAD'] = pyvcf.parser._Format('CAD',None,'Integer','Calculated Allelic Depth, used for VAF calculation')
     vcf_reader.metadata['VAFcheckerCmd'] = [get_command_line()]
     return( vcf_reader )
 
 def get_sample_name( bamfile ):
+    """
+    Function to get the sample name from the bam file
+    Input: An AlignmentFile object of the bam file
+    Return: The sample or False if there is no SM tag in the bam header
+    """
     header = bamfile.header
     if 'RG' in header:
         if type(header['RG']) is list:
@@ -56,6 +79,13 @@ def get_sample_name( bamfile ):
     return( False )
 
 def update_call_data( call, edit_keys, edit_values ):
+    """
+    Function to add or update a field to the format field.
+    This will be automatically update in the call object
+    Input: A call object
+    Input: A list with format fields
+    Input: A list with format values
+    """
     f_keys = list(vcf_reader.formats.keys())
     d = dict(call.data._asdict())
     f_vals = list()
@@ -72,6 +102,12 @@ def update_call_data( call, edit_keys, edit_values ):
     call.data = collections.namedtuple('CallData',f_keys)(**handy_dict)
 
 def check_pileupread( pileupread ):
+    """
+    Function to check a pileup read.
+    Returns True if the read needs to be kept and returns False if read can be skipped.
+    Input: Pileupread object
+    Return: True or False
+    """
     if pileupread.alignment.is_duplicate:
         return( False )
     if pileupread.is_del:
@@ -88,6 +124,12 @@ def check_pileupread( pileupread ):
     return( True )
 
 def check_record( record ):
+    """
+    Function to check a record.
+    Returns True if the record needs to be kept and returns False if record can be skipped.
+    Input: Record object
+    Returns: True or False
+    """
     if record.QUAL < args.QUAL:
         return( False )
     if record.FILTER:
@@ -96,16 +138,28 @@ def check_record( record ):
     return( True )
 
 def parse_chr_vcf(q, q_out, chr_vcf_reader, bams):
+    """
+    Function to parse the vcf per contig.
+    Write the new record to a vcf file.
+    Input: Queue object
+    Input: Queue out object
+    Input: VCF reader object
+    Input: List with the bam names
+    """
     while True:
         try:
+            # Get contig one by one from the queue
             contig = q.get(block=False,timeout=1)
             try:
+                # Try to parse the specific contig from the vcf
                 chr_vcf_reader.fetch(contig)
             except:
+                # Skip contig if this one is not present in the vcf file
                 continue
             for record in chr_vcf_reader.fetch(contig):
                 if ( check_record( record ) ):
                     for call in (record.samples):
+                        # Add empty VAF and CAD tag to the record
                         update_call_data(call, ['VAF','CAD'], [None, None])
                     for bam in bams:
                         F=pysam.AlignmentFile(bam,'rb')
@@ -117,21 +171,25 @@ def parse_chr_vcf(q, q_out, chr_vcf_reader, bams):
                             for pileupread in pileupcolumn.pileups:
                                 if ( check_pileupread( pileupread) ):
                                     for alt in record.ALT:
+                                        # If variant is a SNV
                                         if (len(record.REF) == 1 and len(alt) == 1):
                                             if pileupread.alignment.query_sequence[pileupread.query_position] == record.REF:
                                                 dr+=1
                                             elif pileupread.alignment.query_sequence[pileupread.query_position] == alt:
                                                 dv[record.ALT.index(alt)]+=1
+                                        # If variant is an INDEL, in this case a deletion
                                         elif (len(record.REF) > 1 and len(alt) == 1):
                                             if ( pileupread.indel*-1 == len(record.REF)-1 ):
                                                 dv[record.ALT.index(alt)]+=1
                                             elif pileupread.indel == 0:
                                                 dr+=1
+                                        # If variant is an INDEL, in this case an insertion
                                         elif ( len(record.REF) == 1 and len(alt) > 1 ):
                                             if ( pileupread.indel == len(alt)-1 ):
                                                 dv[record.ALT.index(alt)]+=1
                                             elif pileupread.indel == 0:
                                                 dr+=1
+                                        # If variant is an INDEL
                                         else:
                                             if ( pileupread.indel == (len(alt)-len(record.REF)) ):
                                                 dv[record.ALT.index(alt)]+=1
@@ -152,27 +210,31 @@ def parse_chr_vcf(q, q_out, chr_vcf_reader, bams):
                     format_list.insert(0,'GT')
                     record.FORMAT = ":".join(format_list)
                     vcf_writer.write_record(record)
+        # Break the loop if the queue is empty
         except queue.Empty:
             break
     q_out.put('done')
 
-
+# Read the vcf, fix and add fields to the header
 vcf_reader = pyvcf.Reader(filename=args.input)
 vcf_reader = fix_vcf_header(vcf_reader)
-
 vcf_reader = add_vcf_header(vcf_reader)
 
+# Open a vcf for writing
 vcf_writer = pyvcf.Writer(open('/dev/stdout', 'w'), vcf_reader)
 
+# Read the contig fields in vcf header to get all contigs
 contig_list = []
 for contig in vcf_reader.contigs:
     contig_list.append(contig)
 
+# Create an input queue with the contigs and an empty output queue
 q = mp.Queue()
 q_out = mp.Queue()
 for contig in contig_list:
     q.put(contig)
 
+# Create number of processes to parse the vcf file
 processes = [mp.Process(target=parse_chr_vcf, args=(q, q_out, vcf_reader, args.bam)) for x in range(args.threads)]
 
 for p in processes:
@@ -186,8 +248,8 @@ while liveprocs:
             done = q_out.get(block=False, timeout=1)
     except queue.Empty:
         pass
-
-    time.sleep(5)    # Give tasks a chance to put more data in
+# Give tasks a chance to put more data in
+    time.sleep(5)
     if not q.empty():
         continue
     liveprocs = [p for p in liveprocs if p.is_alive()]
