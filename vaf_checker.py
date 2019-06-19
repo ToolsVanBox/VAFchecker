@@ -10,16 +10,16 @@ import time
 import sys
 import collections
 
-__version__ = '1.0.0'
+__version__ = 'v1.0.1'
 
 parser = argparse.ArgumentParser()
 parser = argparse.ArgumentParser(description='Put here a description.')
 parser.add_argument('-i', '--input', type=str, help='Input vcf file', required=True)
 parser.add_argument('-b', '--bam', action='append', nargs="*", type=str, help='Input bam file', required=True)
-parser.add_argument('-t', '--threads', default=4, type=int, help='Number of threads [default: 4]')
-parser.add_argument('-Q', '--QUAL', default=50, type=int, help='Report only variants with a minimal QUAL flag [default: 50]')
-parser.add_argument('-m', '--mapq', default=0, type=int, help='Include only reads with a minimal mapq [default: 0]')
-parser.add_argument('-p', '--base_phred_quality', default=0, type=int, help='Include only bases with a minimal base phred quality [default: 37]')
+parser.add_argument('-t', '--threads', default=4, type=int, help="Number of threads (default: %(default)s)")
+parser.add_argument('-Q', '--QUAL', default=50, type=int, help="Report only variants with a minimal QUAL flag (default: %(default)s)")
+parser.add_argument('-m', '--mapq', default=0, type=int, help="Include only reads with a minimal mapq (default: %(default)s)")
+parser.add_argument('-p', '--base_phred_quality', default=0, type=int, help="Include only bases with a minimal base phred quality (default: %(default)s)")
 parser.add_argument('-v', '--version', action='version', version=__version__)
 
 args = parser.parse_args()
