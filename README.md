@@ -22,6 +22,7 @@ VAFchecker requires the following modules:
 * argparse
 * multiprocessing
 * queue
+
 Install the required modules:
 ```
 > pip install -r requirements.txt

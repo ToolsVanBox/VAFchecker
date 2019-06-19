@@ -7,6 +7,8 @@ import argparse
 import multiprocessing as mp
 import queue
 import time
+import sys
+import collections
 
 __version__ = '1.0.0'
 
@@ -15,21 +17,84 @@ parser = argparse.ArgumentParser(description='Put here a description.')
 parser.add_argument('-i', '--input', type=str, help='Input vcf file', required=True)
 parser.add_argument('-b', '--bam', action='append', nargs="*", type=str, help='Input bam file', required=True)
 parser.add_argument('-t', '--threads', default=4, type=int, help='Number of threads [default: 4]')
-parser.add_argument('-q', '--qual', default=50, type=int, help='Report only variants with a minimal qual [default: 50]')
-#parser.add_argument('-f', '--filter', default='PASS', action='append', help='Report only variants with one of the filter [default: PASS]')
+parser.add_argument('-Q', '--QUAL', default=50, type=int, help='Report only variants with a minimal QUAL flag [default: 50]')
 parser.add_argument('-m', '--mapq', default=0, type=int, help='Include only reads with a minimal mapq [default: 0]')
-parser.add_argument('-p', '--base_phred_quality', default=37, type=int, help='Include only bases with a minimal base phred quality [default: 37]')
+parser.add_argument('-p', '--base_phred_quality', default=0, type=int, help='Include only bases with a minimal base phred quality [default: 37]')
 parser.add_argument('-v', '--version', action='version', version=__version__)
 
 args = parser.parse_args()
 args.bam = [x for l in args.bam for x in l] #Flatten input list of bam files
 
-print("Variant"+"\t"+"\t".join(args.bam))
+def get_command_line():
+    cmdline = sys.argv[0]
+    for arg in vars(args):
+        if type(getattr(args,arg)) is list:
+            for a in getattr(args,arg):
+                    cmdline += " --"+arg+" "+str(a)
+        else:
+            cmdline += " --"+arg+" "+str(getattr(args,arg))
+    return( '"'+cmdline+'"' )
 
-def parse_chr_vcf(q, q_out, vcf, bams):
-    chr_vcf_reader = pyvcf.Reader(filename=vcf)
-    chr_vcf_reader.infos['dbNSFP_clinvar_clnsig'] = pyvcf.parser._Info("dbNSFP_clinvar_clnsig",1,"String","Field 'clinvar_clnsig' from dbNSFP", None, None)
+def fix_vcf_header( vcf_reader ):
+    vcf_reader.infos['dbNSFP_clinvar_clnsig'] = pyvcf.parser._Info("dbNSFP_clinvar_clnsig",1,"String","Field 'clinvar_clnsig' from dbNSFP", None, None)
+    return( vcf_reader )
 
+def add_vcf_header( vcf_reader ):
+    vcf_reader.formats['VAF'] = pyvcf.parser._Format('VAF',None,'Integer','Variant Allele Frequency calculated from the BAM file')
+    vcf_reader.formats['CAD'] = pyvcf.parser._Format('CAD',None,'Integer','Calculated Allelic Depth, used for VAF calculation')
+    vcf_reader.metadata['VAFcheckerCmd'] = [get_command_line()]
+    return( vcf_reader )
+
+def get_sample_name( bamfile ):
+    header = bamfile.header
+    if 'RG' in header:
+        if type(header['RG']) is list:
+            return(header['RG'][0]['SM'])
+        else:
+            return(header['RG']['SM'])
+    return( False )
+
+def update_call_data( call, edit_keys, edit_values ):
+    f_keys = list(vcf_reader.formats.keys())
+    d = dict(call.data._asdict())
+    f_vals = list()
+    for key in f_keys:
+        if key in edit_keys:
+            f_vals.append(edit_values[edit_keys.index(key)] )
+        elif key in d:
+            f_vals.append(d[key] )
+        else:
+            f_vals.append(None)
+    handy_dict = dict(zip(f_keys, f_vals))
+    f_keys.remove('GT')
+    f_keys.insert(0,'GT')
+    call.data = collections.namedtuple('CallData',f_keys)(**handy_dict)
+
+def check_pileupread( pileupread ):
+    if pileupread.alignment.is_duplicate:
+        return( False )
+    if pileupread.is_del:
+        return( False )
+    if pileupread.is_refskip:
+        return( False )
+    if not pileupread.query_position:
+        return( False )
+    if pileupread.alignment.mapq < args.mapq:
+        return( False )
+    if pileupread.alignment.query_qualities[pileupread.query_position] < args.base_phred_quality:
+        return( False )
+
+    return( True )
+
+def check_record( record ):
+    if record.QUAL < args.QUAL:
+        return( False )
+    if record.FILTER:
+        return( False )
+
+    return( True )
+
+def parse_chr_vcf(q, q_out, chr_vcf_reader, bams):
     while True:
         try:
             contig = q.get(block=False,timeout=1)
@@ -38,52 +103,66 @@ def parse_chr_vcf(q, q_out, vcf, bams):
             except:
                 continue
             for record in chr_vcf_reader.fetch(contig):
-                if len(record.ALT) > 1 or record.QUAL < args.qual or record.FILTER:
-                    continue
-                vafs = []
-                for bam in bams:
-                    F=pysam.AlignmentFile(bam,'rb')
-                    dv = 0
-                    dr = 0
-                    for pileupcolumn in F.pileup(record.CHROM, int(record.POS)-1, int(record.POS), truncate=True, stepper='nofilter'):
-                        for pileupread in pileupcolumn.pileups:
-                            if pileupread.alignment.is_duplicate:
-                                continue
-                            if pileupread.query_position and pileupread.alignment.mapq >= args.mapq and pileupread.alignment.query_qualities[pileupread.query_position] >= args.base_phred_quality:
-                                if pileupread.is_del:
-                                    print("DEL")
-                                if not pileupread.is_del and not pileupread.is_refskip:
-                                    if (len(record.REF) == 1 and len(record.ALT[0]) == 1):
-                                        if pileupread.alignment.query_sequence[pileupread.query_position] == record.REF:
-                                            dr+=1
-                                        elif pileupread.alignment.query_sequence[pileupread.query_position] in record.ALT:
-                                            dv+=1
-                                    else:
-                                        if ( len(record.REF) > 1 ):
+                if ( check_record( record ) ):
+                    for call in (record.samples):
+                        update_call_data(call, ['VAF','CAD'], [None, None])
+                    for bam in bams:
+                        F=pysam.AlignmentFile(bam,'rb')
+                        sample_name = get_sample_name(F)
+                        dv = [0]*len(record.ALT)
+                        dr = 0
+                        vaf = [0.0]*len(record.ALT)
+                        for pileupcolumn in F.pileup(record.CHROM, int(record.POS)-1, int(record.POS), truncate=True, stepper='nofilter'):
+                            for pileupread in pileupcolumn.pileups:
+                                if ( check_pileupread( pileupread) ):
+                                    for alt in record.ALT:
+                                        if (len(record.REF) == 1 and len(alt) == 1):
+                                            if pileupread.alignment.query_sequence[pileupread.query_position] == record.REF:
+                                                dr+=1
+                                            elif pileupread.alignment.query_sequence[pileupread.query_position] == alt:
+                                                dv[record.ALT.index(alt)]+=1
+                                        elif (len(record.REF) > 1 and len(alt) == 1):
                                             if ( pileupread.indel*-1 == len(record.REF)-1 ):
-                                                dv+=1
+                                                dv[record.ALT.index(alt)]+=1
                                             elif pileupread.indel == 0:
                                                 dr+=1
-                                        elif ( len(record.ALT[0]) > 1 ):
-                                            if ( pileupread.indel == len(record.ALT[0])-1 ):
-                                                dv+=1
+                                        elif ( len(record.REF) == 1 and len(alt) > 1 ):
+                                            if ( pileupread.indel == len(alt)-1 ):
+                                                dv[record.ALT.index(alt)]+=1
                                             elif pileupread.indel == 0:
                                                 dr+=1
-                    try:
-                        vafs.append(str(dv/float(dv+dr)))
-                    except ZeroDivisionError:
-                        vafs.append('0.0')
-                print( record.CHROM+"_"+str(record.POS)+"_"+record.REF+"/"+str(record.ALT[0])+"\t"+"\t".join(vafs) )
-
-
-
-
+                                        else:
+                                            if ( pileupread.indel == (len(alt)-len(record.REF)) ):
+                                                dv[record.ALT.index(alt)]+=1
+                                            elif pileupread.indel == 0:
+                                                dr+=1
+                        for x in range(0,len(dv)):
+                            try:
+                                vaf[x] = float("{0:.2f}".format(dv[x]/float(dv[x]+dr)))
+                            except ZeroDivisionError:
+                                continue
+                        for call in (record.samples):
+                            if call.sample == sample_name:
+                                cad = list(dv)
+                                cad.insert(0,dr)
+                                update_call_data(call, ['VAF','CAD'], [vaf, cad])
+                    format_list = list(vcf_reader.formats.keys())
+                    format_list.remove('GT')
+                    format_list.insert(0,'GT')
+                    record.FORMAT = ":".join(format_list)
+                    vcf_writer.write_record(record)
         except queue.Empty:
             break
     q_out.put('done')
 
 
 vcf_reader = pyvcf.Reader(filename=args.input)
+vcf_reader = fix_vcf_header(vcf_reader)
+
+vcf_reader = add_vcf_header(vcf_reader)
+
+vcf_writer = pyvcf.Writer(open('/dev/stdout', 'w'), vcf_reader)
+
 contig_list = []
 for contig in vcf_reader.contigs:
     contig_list.append(contig)
@@ -93,7 +172,7 @@ q_out = mp.Queue()
 for contig in contig_list:
     q.put(contig)
 
-processes = [mp.Process(target=parse_chr_vcf, args=(q, q_out, args.input, args.bam)) for x in range(args.threads)]
+processes = [mp.Process(target=parse_chr_vcf, args=(q, q_out, vcf_reader, args.bam)) for x in range(args.threads)]
 
 for p in processes:
     p.start()
