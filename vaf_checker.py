@@ -9,8 +9,9 @@ import queue
 import time
 import sys
 import collections
+import subprocess
 
-__version__ = 'v1.0.1'
+__version__ = subprocess.check_output(["git", "describe"]).strip().decode('UTF-8')
 
 parser = argparse.ArgumentParser()
 parser = argparse.ArgumentParser(description='Put here a description.')
