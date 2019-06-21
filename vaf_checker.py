@@ -10,9 +10,12 @@ import time
 import sys
 import collections
 import subprocess
+import os
+import glob
 
 # Get version from git
-__version__ = subprocess.check_output(["git", "describe"]).strip().decode('UTF-8')
+#__version__ = subprocess.check_output(["git", "describe"]).strip().decode('UTF-8')
+__version__ = 'v.1.1.0'
 
 # Set arguments
 parser = argparse.ArgumentParser()
@@ -20,6 +23,8 @@ parser = argparse.ArgumentParser(description='Put here a description.')
 parser.add_argument('-i', '--input', type=str, help='Input vcf file', required=True)
 parser.add_argument('-b', '--bam', action='append', nargs="*", type=str, help='Input bam file', required=True)
 parser.add_argument('-t', '--threads', default=4, type=int, help="Number of threads (default: %(default)s)")
+parser.add_argument('-c', '--clonal_threshold', default=0.3, type=float, help="Sample reported as subclonal if VAF is lower (default: %(default)s)")
+parser.add_argument('-a', '--absent_threshold', default=0.02, type=float, help="Sample reported as absent if VAF is lower(default: %(default)s)")
 parser.add_argument('-Q', '--QUAL', default=50, type=int, help="Report only variants with a minimal QUAL flag (default: %(default)s)")
 parser.add_argument('-m', '--mapq', default=0, type=int, help="Include only reads with a minimal mapq (default: %(default)s)")
 parser.add_argument('-p', '--base_phred_quality', default=0, type=int, help="Include only bases with a minimal base phred quality (default: %(default)s)")
@@ -62,6 +67,12 @@ def add_vcf_header( vcf_reader ):
     vcf_reader.formats['VAF'] = pyvcf.parser._Format('VAF',None,'Integer','Variant Allele Frequency calculated from the BAM file')
     vcf_reader.formats['CAD'] = pyvcf.parser._Format('CAD',None,'Integer','Calculated Allelic Depth, used for VAF calculation')
     vcf_reader.metadata['VAFcheckerCmd'] = [get_command_line()]
+    vcf_reader.infos['ABSENT'] = pyvcf.parser._Info('ABSENT',1,'Integer','Number of samples without the variant', None, None)
+    vcf_reader.infos['SUBCLONAL'] = pyvcf.parser._Info('SUBCLONAL',1,'Integer','Number of samples with a subclonal variant', None, None)
+    vcf_reader.infos['CLONAL'] = pyvcf.parser._Info('CLONAL',1,'Integer','Number of samples with a clonal variant', None, None)
+    vcf_reader.infos['ABSENT_SAMPLES'] = pyvcf.parser._Info('ABSENT_SAMPLES',None,'String','Samples without the variant', None, None)
+    vcf_reader.infos['SUBCLONAL_SAMPLES'] = pyvcf.parser._Info('SUBCLONAL_SAMPLES',None,'String','Samples with a subclonal variant', None, None)
+    vcf_reader.infos['CLONAL_SAMPLES'] = pyvcf.parser._Info('CLONAL_SAMPLES',None,'String','Samples with a clonal variant', None, None)
     return( vcf_reader )
 
 def get_sample_name( bamfile ):
@@ -134,10 +145,9 @@ def check_record( record ):
         return( False )
     if record.FILTER:
         return( False )
-
     return( True )
 
-def parse_chr_vcf(q, q_out, chr_vcf_reader, bams):
+def parse_chr_vcf(q, q_out, contig_vcf_reader, bams):
     """
     Function to parse the vcf per contig.
     Write the new record to a vcf file.
@@ -150,13 +160,17 @@ def parse_chr_vcf(q, q_out, chr_vcf_reader, bams):
         try:
             # Get contig one by one from the queue
             contig = q.get(block=False,timeout=1)
+            contig_vcf_writer = pyvcf.Writer(open("./tmp/"+contig+".vcf",'w'), contig_vcf_reader)
             try:
                 # Try to parse the specific contig from the vcf
-                chr_vcf_reader.fetch(contig)
+                contig_vcf_reader.fetch(contig)
             except:
                 # Skip contig if this one is not present in the vcf file
                 continue
-            for record in chr_vcf_reader.fetch(contig):
+            for record in contig_vcf_reader.fetch(contig):
+                clonal_samples = list()
+                subclonal_samples = list()
+                absent_samples = list()
                 if ( check_record( record ) ):
                     for call in (record.samples):
                         # Add empty VAF and CAD tag to the record
@@ -167,7 +181,7 @@ def parse_chr_vcf(q, q_out, chr_vcf_reader, bams):
                         dv = [0]*len(record.ALT)
                         dr = 0
                         vaf = [0.0]*len(record.ALT)
-                        for pileupcolumn in F.pileup(record.CHROM, int(record.POS)-1, int(record.POS), truncate=True, stepper='nofilter'):
+                        for pileupcolumn in F.pileup(record.CHROM, int(record.POS)-1, int(record.POS), truncate=True, stepper='samtools',min_base_quality=args.base_phred_quality):
                             for pileupread in pileupcolumn.pileups:
                                 if ( check_pileupread( pileupread) ):
                                     for alt in record.ALT:
@@ -205,15 +219,27 @@ def parse_chr_vcf(q, q_out, chr_vcf_reader, bams):
                                 cad = list(dv)
                                 cad.insert(0,dr)
                                 update_call_data(call, ['VAF','CAD'], [vaf, cad])
+                                if vaf[0] == args.absent_threshold:
+                                    absent_samples.append(call.sample)
+                                elif vaf[0] < args.clonal_threshold:
+                                    subclonal_samples.append(call.sample)
+                                else:
+                                    clonal_samples.append(call.sample)
                     format_list = list(vcf_reader.formats.keys())
                     format_list.remove('GT')
                     format_list.insert(0,'GT')
                     record.FORMAT = ":".join(format_list)
-                    vcf_writer.write_record(record)
+                    record.INFO['ABSENT'] = len(absent_samples)
+                    record.INFO['SUBCLONAL'] = len(subclonal_samples)
+                    record.INFO['CLONAL'] = len(clonal_samples)
+                    record.INFO['ABSENT_SAMPLES'] = absent_samples
+                    record.INFO['SUBCLONAL_SAMPLES'] = subclonal_samples
+                    record.INFO['CLONAL_SAMPLES'] = clonal_samples
+                    contig_vcf_writer.write_record(record)
         # Break the loop if the queue is empty
         except queue.Empty:
             break
-    q_out.put('done')
+    q_out.put( 'done' )
 
 # Read the vcf, fix and add fields to the header
 vcf_reader = pyvcf.Reader(filename=args.input)
@@ -222,6 +248,12 @@ vcf_reader = add_vcf_header(vcf_reader)
 
 # Open a vcf for writing
 vcf_writer = pyvcf.Writer(open('/dev/stdout', 'w'), vcf_reader)
+
+try:
+    os.stat('./tmp')
+except:
+    os.mkdir('./tmp')
+
 
 # Read the contig fields in vcf header to get all contigs
 contig_list = []
@@ -256,3 +288,11 @@ while liveprocs:
 
 for p in processes:
     p.join()
+
+for tmp_vcf in glob.glob('./tmp/*.vcf'):
+    tmp_vcf_reader = pyvcf.Reader(filename=tmp_vcf)
+    for record in tmp_vcf_reader:
+        vcf_writer.write_record(record)
+    os.remove(tmp_vcf)
+
+os.rmdir('./tmp')
