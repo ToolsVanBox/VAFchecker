@@ -24,7 +24,7 @@ parser.add_argument('-i', '--input', type=str, help='Input vcf file', required=T
 parser.add_argument('-b', '--bam', action='append', nargs="*", type=str, help='Input bam file', required=True)
 parser.add_argument('-t', '--threads', default=4, type=int, help="Number of threads (default: %(default)s)")
 parser.add_argument('-c', '--clonal_threshold', default=0.3, type=float, help="Sample reported as subclonal if VAF is lower (default: %(default)s)")
-parser.add_argument('-a', '--absent_threshold', default=0.02, type=float, help="Sample reported as absent if VAF is lower(default: %(default)s)")
+parser.add_argument('-a', '--absent_threshold', default=0.0, type=float, help="Sample reported as absent if VAF is lower(default: %(default)s)")
 parser.add_argument('-Q', '--QUAL', default=50, type=int, help="Report only variants with a minimal QUAL flag (default: %(default)s)")
 parser.add_argument('-m', '--mapq', default=0, type=int, help="Include only reads with a minimal mapq (default: %(default)s)")
 parser.add_argument('-p', '--base_phred_quality', default=0, type=int, help="Include only bases with a minimal base phred quality (default: %(default)s)")
