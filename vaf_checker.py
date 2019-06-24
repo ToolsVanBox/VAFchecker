@@ -219,7 +219,7 @@ def parse_chr_vcf(q, q_out, contig_vcf_reader, bams):
                                 cad = list(dv)
                                 cad.insert(0,dr)
                                 update_call_data(call, ['VAF','CAD'], [vaf, cad])
-                                if vaf[0] == args.absent_threshold:
+                                if vaf[0] < args.absent_threshold:
                                     absent_samples.append(call.sample)
                                 elif vaf[0] < args.clonal_threshold:
                                     subclonal_samples.append(call.sample)
