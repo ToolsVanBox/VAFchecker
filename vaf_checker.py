@@ -168,9 +168,9 @@ def parse_chr_vcf(q, q_out, contig_vcf_reader, bams):
                 # Skip contig if this one is not present in the vcf file
                 continue
             for record in contig_vcf_reader.fetch(contig):
-                clonal_samples = list()
-                subclonal_samples = list()
-                absent_samples = list()
+                clonal_samples = [[]]*len(record.ALT)
+                subclonal_samples = [[]]*len(record.ALT)
+                absent_samples = [[]]*len(record.ALT)
                 if ( check_record( record ) ):
                     for call in (record.samples):
                         # Add empty VAF and CAD tag to the record
@@ -219,22 +219,23 @@ def parse_chr_vcf(q, q_out, contig_vcf_reader, bams):
                                 cad = list(dv)
                                 cad.insert(0,dr)
                                 update_call_data(call, ['VAF','CAD'], [vaf, cad])
-                                if vaf[0] <= args.absent_threshold:
-                                    absent_samples.append(call.sample)
-                                elif vaf[0] < args.clonal_threshold:
-                                    subclonal_samples.append(call.sample)
-                                else:
-                                    clonal_samples.append(call.sample)
+                                for vaf_idx in range(len(vaf)):
+                                    if vaf[vaf_idx] <= args.absent_threshold:
+                                        absent_samples[vaf_idx].append(call.sample)
+                                    elif vaf[vaf_idx] < args.clonal_threshold:
+                                        subclonal_samples[vaf_idx].append(call.sample)
+                                    else:
+                                        clonal_samples[vaf_idx].append(call.sample)
                     format_list = list(vcf_reader.formats.keys())
                     format_list.remove('GT')
                     format_list.insert(0,'GT')
                     record.FORMAT = ":".join(format_list)
-                    record.INFO['ABSENT'] = len(absent_samples)
-                    record.INFO['SUBCLONAL'] = len(subclonal_samples)
-                    record.INFO['CLONAL'] = len(clonal_samples)
-                    record.INFO['ABSENT_SAMPLES'] = absent_samples
-                    record.INFO['SUBCLONAL_SAMPLES'] = subclonal_samples
-                    record.INFO['CLONAL_SAMPLES'] = clonal_samples
+                    record.INFO['ABSENT'] = [len(x) for x in absent_samples]
+                    record.INFO['SUBCLONAL'] = [len(x) for x in subclonal_samples]
+                    record.INFO['CLONAL'] = [len(x) for x in clonal_samples]
+                    record.INFO['ABSENT_SAMPLES'] = ["|".join(x) for x in absent_samples]
+                    record.INFO['SUBCLONAL_SAMPLES'] = ["|".join(x) for x in subclonal_samples]
+                    record.INFO['CLONAL_SAMPLES'] = ["|".join(x) for x in clonal_samples]
                     contig_vcf_writer.write_record(record)
         # Break the loop if the queue is empty
         except queue.Empty:
