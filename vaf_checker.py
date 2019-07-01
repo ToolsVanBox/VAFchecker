@@ -15,7 +15,7 @@ import glob
 
 # Get version from git
 #__version__ = subprocess.check_output(["git", "describe"]).strip().decode('UTF-8')
-__version__ = 'v.1.1.0'
+__version__ = 'v1.1.1'
 
 # Set arguments
 parser = argparse.ArgumentParser()
