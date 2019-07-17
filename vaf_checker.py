@@ -160,7 +160,7 @@ def parse_chr_vcf(q, q_out, contig_vcf_reader, bams):
         try:
             # Get contig one by one from the queue
             contig = q.get(block=False,timeout=1)
-            contig_vcf_writer = pyvcf.Writer(open("./tmp/"+contig+".vcf",'w'), contig_vcf_reader)
+            contig_vcf_writer = pyvcf.Writer(open("./VAFchecker_tmp/"+contig+".vcf",'w'), contig_vcf_reader)
             try:
                 # Try to parse the specific contig from the vcf
                 contig_vcf_reader.fetch(contig)
@@ -251,9 +251,9 @@ vcf_reader = add_vcf_header(vcf_reader)
 vcf_writer = pyvcf.Writer(open('/dev/stdout', 'w'), vcf_reader)
 
 try:
-    os.stat('./tmp')
+    os.stat('./VAFchecker_tmp')
 except:
-    os.mkdir('./tmp')
+    os.mkdir('./VAFchecker_tmp')
 
 
 # Read the contig fields in vcf header to get all contigs
@@ -290,10 +290,10 @@ while liveprocs:
 for p in processes:
     p.join()
 
-for tmp_vcf in glob.glob('./tmp/*.vcf'):
+for tmp_vcf in glob.glob('./VAFchecker_tmp/*.vcf'):
     tmp_vcf_reader = pyvcf.Reader(filename=tmp_vcf)
     for record in tmp_vcf_reader:
         vcf_writer.write_record(record)
     os.remove(tmp_vcf)
 
-os.rmdir('./tmp')
+#os.rmdir('./VAFchecker_tmp')
