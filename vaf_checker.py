@@ -15,7 +15,7 @@ import glob
 
 # Get version from git
 #__version__ = subprocess.check_output(["git", "describe"]).strip().decode('UTF-8')
-__version__ = 'v1.1.2'
+__version__ = 'v1.2.0'
 
 # Set arguments
 parser = argparse.ArgumentParser()
@@ -64,7 +64,7 @@ def add_vcf_header( vcf_reader ):
     Input: A vcf reader object
     Return: The vcf reader object with new headers added
     """
-    vcf_reader.formats['VAF'] = pyvcf.parser._Format('VAF',None,'Integer','Variant Allele Frequency calculated from the BAM file')
+    vcf_reader.formats['VAF'] = pyvcf.parser._Format('VAF',None,'Float','Variant Allele Frequency calculated from the BAM file')
     vcf_reader.formats['CAD'] = pyvcf.parser._Format('CAD',None,'Integer','Calculated Allelic Depth, used for VAF calculation')
     vcf_reader.metadata['VAFcheckerCmd'] = [get_command_line()]
     vcf_reader.infos['ABSENT'] = pyvcf.parser._Info('ABSENT',1,'Integer','Number of samples without the variant', None, None)
